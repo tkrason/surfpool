@@ -265,17 +265,25 @@ impl SurfnetSvmLocker {
             return Ok(());
         };
 
-        let (mut epoch_info, epoch_schedule, some_genesis_hash) = {
+        let (mut epoch_info, epoch_schedule, rent, some_genesis_hash) = {
             let epoch_info = remote_client.get_epoch_info().await?;
             let epoch_schedule = remote_client.get_epoch_schedule().await?;
+            let rent = remote_client.get_rent().await;
             let some_genesis_hash = remote_client.get_genesis_hash().await.ok();
-            (epoch_info, epoch_schedule, some_genesis_hash)
+            (epoch_info, epoch_schedule, rent, some_genesis_hash)
         };
         epoch_info.transaction_count = None;
 
         self.with_svm_writer(move |svm_writer| {
             svm_writer.cached_genesis_hash = some_genesis_hash;
-            svm_writer.initialize(epoch_info, epoch_schedule);
+            let rent = rent
+                .inspect_err(|e| {
+                    svm_writer.simnet_events_tx.warn(format!(
+                        "Keeping the default rent, remote rent is unavailable: {e}"
+                    ));
+                })
+                .ok();
+            svm_writer.initialize(epoch_info, epoch_schedule, rent);
         });
         Ok(())
     }
@@ -4641,6 +4649,17 @@ mod tests {
                     serde_json::to_value(EpochSchedule::without_warmup()).unwrap()
                 }
                 RpcRequest::GetGenesisHash => serde_json::json!(self.genesis_hash.to_string()),
+                RpcRequest::GetAccountInfo => serde_json::json!({
+                    "context": { "slot": 2 },
+                    "value": {
+                        "lamports": 1_009_200,
+                        "owner": "Sysvar1111111111111111111111111111111111111",
+                        "executable": false,
+                        "rentEpoch": u64::MAX,
+                        "space": 17,
+                        "data": ["2BMAAAAAAAAAAAAAAADwPzI=", "base64"],
+                    },
+                }),
                 _ => panic!("unexpected startup RPC request: {request:?}"),
             })
         }
@@ -4693,7 +4712,11 @@ mod tests {
                 .inner,
             expected_hash
         );
-        assert_eq!(requests.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            svm_locker.with_svm_reader(|svm| svm.inner.minimum_balance_for_rent_exemption(200)),
+            1_666_240
+        );
+        assert_eq!(requests.load(Ordering::Relaxed), 4);
     }
 
     #[cfg(feature = "sqlite")]
