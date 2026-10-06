@@ -50,6 +50,7 @@ use solana_sdk_ids::{bpf_loader, system_program};
 use solana_signature::Signature;
 use solana_slot_hashes::MAX_ENTRIES as MAX_SLOT_HASHES_ENTRIES;
 use solana_system_interface::instruction as system_instruction;
+use solana_sysvar::rent::Rent;
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
 use solana_transaction_status::{
@@ -1344,7 +1345,12 @@ impl SurfnetSvm {
     ///
     /// # Arguments
     /// * `epoch_info` - The epoch information to initialize with.
-    pub fn initialize(&mut self, epoch_info: EpochInfo, epoch_schedule: EpochSchedule) {
+    pub fn initialize(
+        &mut self,
+        epoch_info: EpochInfo,
+        epoch_schedule: EpochSchedule,
+        rent: Option<Rent>,
+    ) {
         self.chain_tip = self.new_blockhash();
         self.latest_epoch_info = epoch_info.clone();
         // Set genesis_slot to the current slot when initializing (syncing with remote)
@@ -1355,6 +1361,9 @@ impl SurfnetSvm {
         self.genesis_updated_at = self.updated_at;
 
         self.inner.set_sysvar(&epoch_schedule);
+        if let Some(rent) = rent {
+            self.inner.set_sysvar(&rent);
+        }
 
         // Reconstruct all sysvars (RecentBlockhashes, SlotHashes, Clock)
         self.reconstruct_sysvars();
@@ -6029,7 +6038,11 @@ mod tests {
             transaction_count: None,
         };
 
-        svm.initialize(epoch_info.clone(), EpochSchedule::without_warmup());
+        svm.initialize(
+            epoch_info.clone(),
+            EpochSchedule::without_warmup(),
+            Some(Rent::with_lamports_per_byte(5080)),
+        );
 
         assert_eq!(svm.slot_time, 321);
         assert!(!svm.instruction_profiling_enabled);
@@ -6037,6 +6050,8 @@ mod tests {
         assert!(!svm.feature_set.is_active(&disable_fees_sysvar::id()));
         assert_eq!(svm.latest_epoch_info, epoch_info);
         assert_eq!(svm.genesis_slot, 777);
+        assert_eq!(svm.inner.get_sysvar::<Rent>().lamports_per_byte, 5080);
+        assert_eq!(svm.inner.minimum_balance_for_rent_exemption(200), 1_666_240);
     }
 
     #[test]

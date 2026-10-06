@@ -34,6 +34,7 @@ use solana_rpc_client_api::client_error::{
     Error as ClientError, ErrorKind as ClientErrorKind, Result as ClientResult,
 };
 use solana_signature::Signature;
+use solana_sysvar::rent::{self, Rent};
 use solana_transaction_status::{EncodedConfirmedTransactionWithStatusMeta, UiConfirmedBlock};
 use surfpool_types::sanitized_datasource_url;
 
@@ -225,6 +226,15 @@ impl SurfnetRemoteClient {
 
     pub async fn get_epoch_schedule(&self) -> SurfpoolResult<EpochSchedule> {
         self.client.get_epoch_schedule().await.map_err(Into::into)
+    }
+
+    pub async fn get_rent(&self) -> SurfpoolResult<Rent> {
+        let data = self
+            .client
+            .get_account_data(&rent::id())
+            .await
+            .map_err(|e| SurfpoolError::get_account(rent::id(), e))?;
+        bincode::deserialize(&data).map_err(|e| SurfpoolError::deserialize_error("Rent", e))
     }
 
     pub async fn get_account(
