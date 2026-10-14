@@ -293,7 +293,12 @@ impl SurfnetRemoteClient {
             .client
             .get_multiple_accounts_with_commitment(pubkeys, commitment_config)
             .await
-            .map_err(SurfpoolError::get_multiple_accounts)?
+            .map_err(|error| {
+                SurfpoolError::get_multiple_accounts(
+                    pubkeys,
+                    sanitized_client_error(&error, &self.client.url()),
+                )
+            })?
             .value;
         debug!("Fetched {:?} accounts from remote", pubkeys);
         debug!(
@@ -361,7 +366,12 @@ impl SurfnetRemoteClient {
                 .client
                 .get_multiple_accounts_with_commitment(&account_pubkeys, commitment_config)
                 .await
-                .map_err(SurfpoolError::get_multiple_accounts)?
+                .map_err(|error| {
+                    SurfpoolError::get_multiple_accounts(
+                        &account_pubkeys,
+                        sanitized_client_error(&error, &self.client.url()),
+                    )
+                })?
                 .value;
 
             debug!(
