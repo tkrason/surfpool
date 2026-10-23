@@ -4,6 +4,7 @@ use itertools::Itertools;
 use jsonrpc_core::{BoxFuture, Error, Result};
 use jsonrpc_derive::rpc;
 use litesvm::types::TransactionMetadata;
+use solana_account::ReadableAccount;
 use solana_account_decoder::UiAccount;
 use solana_client::{
     rpc_config::{
@@ -1828,6 +1829,7 @@ impl Full for SurfpoolFullRpc {
                                 &tx_message,
                                 None,
                                 None,
+                                None,
                             ))
                             .map_err(|e| {
                                 Error::invalid_params(format!(
@@ -1889,6 +1891,7 @@ impl Full for SurfpoolFullRpc {
                                 false,
                                 &tx_message,
                                 None, // No loaded addresses available in error reporting context
+                                None,
                                 None,
                             ))
                             .map_err(|e| {
@@ -2015,6 +2018,15 @@ impl Full for SurfpoolFullRpc {
                 .message
                 .address_table_lookups()
                 .map_or(0, <[_]>::len);
+            let pre_balances: Vec<u64> = account_updates
+                .iter()
+                .map(|account_update| match account_update {
+                    GetAccountResult::None(_) => 0,
+                    GetAccountResult::FoundAccount(_, account, _)
+                    | GetAccountResult::FoundCoupledAccount((_, account), _, _) => account.lamports,
+                })
+                .collect();
+
             let mut seen_accounts = std::collections::HashSet::new();
             let mut loaded_accounts_data_size: u64 = 0;
 
@@ -2127,6 +2139,21 @@ impl Full for SurfpoolFullRpc {
                         }
                         accounts = Some(ui_accounts);
                     }
+                    let post_lamports: std::collections::HashMap<_, _> = tx_info
+                        .post_accounts
+                        .iter()
+                        .map(|(pubkey, account)| (*pubkey, account.lamports()))
+                        .collect();
+                    let post_balances = transaction_pubkeys
+                        .iter()
+                        .zip(&pre_balances)
+                        .map(|(pubkey, pre)| post_lamports.get(pubkey).copied().unwrap_or(*pre))
+                        .collect();
+                    let balances = SimulatedBalances {
+                        fee: tx_info.meta.fee,
+                        pre: pre_balances,
+                        post: post_balances,
+                    };
                     get_simulate_transaction_result(
                         tx_info.meta,
                         accounts,
@@ -2136,18 +2163,31 @@ impl Full for SurfpoolFullRpc {
                         &tx_message,
                         loaded_addresses_data.as_ref(),
                         Some(loaded_accounts_data_size as u32),
+                        Some(balances),
                     )
                 }
-                Err(tx_info) => get_simulate_transaction_result(
-                    tx_info.meta,
-                    None,
-                    Some(tx_info.err),
-                    replacement_blockhash,
-                    config.inner_instructions,
-                    &tx_message,
-                    loaded_addresses_data.as_ref(),
-                    Some(loaded_accounts_data_size as u32),
-                ),
+                Err(tx_info) => {
+                    let mut post_balances = pre_balances.clone();
+                    if let Some(payer) = post_balances.first_mut() {
+                        *payer = payer.saturating_sub(tx_info.meta.fee);
+                    }
+                    let balances = SimulatedBalances {
+                        fee: tx_info.meta.fee,
+                        pre: pre_balances,
+                        post: post_balances,
+                    };
+                    get_simulate_transaction_result(
+                        tx_info.meta,
+                        None,
+                        Some(tx_info.err),
+                        replacement_blockhash,
+                        config.inner_instructions,
+                        &tx_message,
+                        loaded_addresses_data.as_ref(),
+                        Some(loaded_accounts_data_size as u32),
+                        Some(balances),
+                    )
+                }
             };
 
             Ok(RpcResponse {
@@ -2789,6 +2829,13 @@ impl Full for SurfpoolFullRpc {
     }
 }
 
+struct SimulatedBalances {
+    fee: u64,
+    pre: Vec<u64>,
+    post: Vec<u64>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn get_simulate_transaction_result(
     metadata: TransactionMetadata,
     accounts: Option<Vec<Option<UiAccount>>>,
@@ -2798,7 +2845,12 @@ fn get_simulate_transaction_result(
     message: &VersionedMessage,
     loaded_addresses: Option<&solana_message::v0::LoadedAddresses>,
     loaded_accounts_data_size: Option<u32>,
+    balances: Option<SimulatedBalances>,
 ) -> RpcSimulateTransactionResult {
+    let (fee, pre_balances, post_balances) = match balances {
+        Some(balances) => (Some(balances.fee), Some(balances.pre), Some(balances.post)),
+        None => (None, None, None),
+    };
     RpcSimulateTransactionResult {
         accounts,
         err: error.map(|e| e.into()),
@@ -2821,9 +2873,9 @@ fn get_simulate_transaction_result(
         },
         units_consumed: Some(metadata.compute_units_consumed),
         loaded_accounts_data_size,
-        fee: None,
-        pre_balances: None,
-        post_balances: None,
+        fee,
+        pre_balances,
+        post_balances,
         pre_token_balances: None,
         post_token_balances: None,
         loaded_addresses: None,
@@ -3009,7 +3061,7 @@ mod tests {
         let message = VersionedMessage::Legacy(LegacyMessage::default());
 
         let result = get_simulate_transaction_result(
-            metadata, None, None, None, false, &message, None, None,
+            metadata, None, None, None, false, &message, None, None, None,
         );
 
         assert!(result.return_data.is_none());
@@ -3018,7 +3070,7 @@ mod tests {
         metadata.return_data.program_id = Pubkey::new_unique();
         metadata.return_data.data = vec![1];
         let result = get_simulate_transaction_result(
-            metadata, None, None, None, false, &message, None, None,
+            metadata, None, None, None, false, &message, None, None, None,
         );
 
         assert!(result.return_data.is_some());
