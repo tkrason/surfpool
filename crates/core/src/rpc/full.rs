@@ -2701,7 +2701,7 @@ impl Full for SurfpoolFullRpc {
         )?;
         Ok(RpcResponse {
             context: RpcResponseContext::new(slot),
-            value: 0,
+            value: 1_000_000_000,
         })
     }
 
@@ -5880,7 +5880,7 @@ mod tests {
 
         assert_eq!(result, expected_slot);
         assert_eq!(stake_min_delegation.context.slot, expected_slot);
-        assert_eq!(stake_min_delegation.value, 0); // minimum delegation
+        assert_eq!(stake_min_delegation.value, 1_000_000_000); // minimum delegation
     }
 
     #[test]
@@ -5949,7 +5949,7 @@ mod tests {
 
         assert_eq!(result, expected_slot);
         assert_eq!(stake_min_delegation.context.slot, expected_slot);
-        assert_eq!(stake_min_delegation.value, 0); // minimum delegation
+        assert_eq!(stake_min_delegation.value, 1_000_000_000); // minimum delegation
     }
 
     #[test]
@@ -5976,7 +5976,7 @@ mod tests {
         });
 
         assert_eq!(result.context.slot, expected_slot);
-        assert_eq!(result.value, 0);
+        assert_eq!(result.value, 1_000_000_000);
     }
 
     #[tokio::test(flavor = "multi_thread")]
